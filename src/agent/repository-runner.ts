@@ -716,7 +716,13 @@ async function runWorkerLoop(
 
     let outcome: PageAgentOutcome;
     try {
-      outcome = await runPageAgent(run, next.job, model, onEvent);
+      outcome = await runPageAgent(
+        run,
+        next.job,
+        model,
+        pool.size > 1,
+        onEvent,
+      );
     } catch (error) {
       pool.fatal ??= { error };
       removeInFlightPage(pool, next.job.path);
@@ -860,6 +866,8 @@ const PAGE_WORKER_ATTEMPT_LIMIT = 2;
  * @param run - Active durable repository run.
  * @param job - Pending page job owned by this worker.
  * @param model - Initialized model reused across attempts.
+ * @param poolCanReduce - Whether the pool still holds more than one worker, so
+ *   a rate limit can be relieved by handing a slot back instead of retrying.
  * @param onEvent - Optional bounded worker event consumer.
  * @returns Whether the page was submitted, or the snapshot restored on skip.
  */
@@ -867,6 +875,7 @@ async function runPageAgent(
   run: ActiveRepositoryRun,
   job: PendingPageJob,
   model: BaseChatModel,
+  poolCanReduce: boolean,
   onEvent?: (event: OpenWikiRunEvent) => void,
 ): Promise<PageAgentOutcome> {
   const snapshot = await captureRepositoryPageSnapshot(run, job.id);
@@ -883,11 +892,14 @@ async function runPageAgent(
     if (outcome.status === "submitted") return outcome;
     skipped = outcome;
 
-    // A rate limit means the provider is asking for less traffic, so it is
-    // surfaced to the pool immediately instead of being retried at once.
+    // A rate limit means the provider is asking for less traffic. When the
+    // pool still has a worker to spare, surface it immediately so the loop can
+    // hand a slot back instead of retrying at once. A pool already down to its
+    // last worker has nothing to hand back, so the throttled page is reset and
+    // retried like any other failed attempt.
     if (
       attempt >= PAGE_WORKER_ATTEMPT_LIMIT ||
-      isRateLimitError(outcome.error)
+      (poolCanReduce && isRateLimitError(outcome.error))
     ) {
       break;
     }

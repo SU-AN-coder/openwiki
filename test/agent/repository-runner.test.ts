@@ -1222,6 +1222,34 @@ describe("runNativeRepositoryGeneration with concurrent page workers", () => {
     ).toHaveLength(1);
   });
 
+  test("retries a rate-limited page when a single worker cannot shed load", async () => {
+    harness.planPaths = ["/openwiki/a.md", "/openwiki/b.md"];
+    harness.pageWorkerFailures = 1;
+    harness.pageWorkerFailureError = Object.assign(
+      new Error("Request failed with status code 429"),
+      { status: 429 },
+    );
+
+    // No pageConcurrency: the default single worker has no slot to hand back,
+    // so a throttled page must get the same reset-and-retry as any other
+    // failed attempt instead of being dropped from the update.
+    const events = await runHarness();
+
+    expect(harness.pageRestoreCalls).toBe(1);
+    expect(harness.restoreCalls).toBe(0);
+    expect(
+      harness.currentRun?.state.plan?.pages.map(({ status }) => status),
+    ).toEqual(["complete", "complete"]);
+    expect(harness.finishCalls).toBe(1);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "text" &&
+          event.text.includes("Reduced page concurrency"),
+      ),
+    ).toBe(false);
+  });
+
   test("lowers concurrency after a Bedrock token-quota throttle", async () => {
     harness.planPaths = [
       "/openwiki/a.md",
