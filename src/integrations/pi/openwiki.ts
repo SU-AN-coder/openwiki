@@ -107,12 +107,35 @@ function toolResultText(result: {
   return text || JSON.stringify(result.structuredContent ?? result);
 }
 
+/**
+ * Builds the environment additions for the spawned CLI child.
+ *
+ * `startBridge` spawns the CLI with `process.execPath`. Under a plain Node host
+ * that is the Node binary, but under an Electron host it is the Electron binary,
+ * which runs the CLI as a Node process only when `ELECTRON_RUN_AS_NODE` is set.
+ * The SDK's default child environment is an allowlist (`HOME`, `LOGNAME`, `PATH`,
+ * `SHELL`, `TERM`, `USER`) that drops the variable, so an Electron host has to
+ * re-export it and one that never set it has to have it supplied. Without it the
+ * child starts the Electron app instead of the stdio server and exits, which the
+ * host reports as `MCP error -32000: Connection closed`.
+ *
+ * @returns Environment additions for the child, or `undefined` to keep the SDK's
+ * default environment for a plain Node host.
+ */
+function bridgeEnvironment(): Record<string, string> | undefined {
+  const inherited = process.env.ELECTRON_RUN_AS_NODE;
+  if (inherited) return { ELECTRON_RUN_AS_NODE: inherited };
+  if (process.versions.electron) return { ELECTRON_RUN_AS_NODE: "1" };
+  return undefined;
+}
+
 async function startBridge(onclose: () => void): Promise<Bridge> {
   const cliPath = fileURLToPath(new URL("../../cli/cli.js", import.meta.url));
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [cliPath, "mcp", "--host", "pi"],
     stderr: "inherit",
+    env: bridgeEnvironment(),
   });
   const client = new Client(
     { name: "openwiki-pi", version: OPENWIKI_VERSION },
