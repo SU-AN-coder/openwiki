@@ -53,15 +53,19 @@ type Extension = (pi: {
 const realVersions = process.versions;
 
 /**
- * Reports `process.versions` as an Electron host or as a plain Node host.
+ * Reports `process.versions` as an Electron host, a Bun-compiled host or a
+ * plain Node host.
  *
- * @param electron - Whether the current process should look like Electron.
+ * @param runtime - Which runtime the current process should look like.
  */
-function stubHostRuntime(electron: boolean): void {
+function stubHostRuntime(runtime: "electron" | "bun" | "node"): void {
   Object.defineProperty(process, "versions", {
-    value: electron
-      ? { ...realVersions, electron: "38.0.0" }
-      : { ...realVersions },
+    value:
+      runtime === "electron"
+        ? { ...realVersions, electron: "38.0.0" }
+        : runtime === "bun"
+          ? { ...realVersions, bun: "1.4.3" }
+          : { ...realVersions },
     configurable: true,
     enumerable: true,
     writable: false,
@@ -101,12 +105,13 @@ afterEach(() => {
   });
   sdk.transports.length = 0;
   delete process.env.ELECTRON_RUN_AS_NODE;
+  delete process.env.BUN_BE_BUN;
   vi.unstubAllEnvs();
 });
 
 describe("native Pi package bridge environment", () => {
   test("spawns the CLI as Node when an Electron host never set ELECTRON_RUN_AS_NODE", async () => {
-    stubHostRuntime(true);
+    stubHostRuntime("electron");
     delete process.env.ELECTRON_RUN_AS_NODE;
 
     const options = await runBridgeTool();
@@ -118,7 +123,7 @@ describe("native Pi package bridge environment", () => {
   });
 
   test("forwards ELECTRON_RUN_AS_NODE when the host already exported it", async () => {
-    stubHostRuntime(true);
+    stubHostRuntime("electron");
     vi.stubEnv("ELECTRON_RUN_AS_NODE", "1");
 
     const options = await runBridgeTool();
@@ -128,9 +133,33 @@ describe("native Pi package bridge environment", () => {
     expect(options.env).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
   });
 
+  test("spawns the CLI as Bun when a standalone Bun host never set BUN_BE_BUN", async () => {
+    stubHostRuntime("bun");
+    delete process.env.BUN_BE_BUN;
+
+    const options = await runBridgeTool();
+
+    // process.execPath is the compiled Pi executable here: without this the
+    // child re-runs Pi's bundled entrypoint instead of cli.js. Verified against
+    // a real `bun build --compile` binary (Bun 1.4.3): with it the child prints
+    // the CLI's output, without it the child runs the bundled entry.
+    expect(options.command).toBe(process.execPath);
+    expect(options.env).toEqual({ BUN_BE_BUN: "1" });
+  });
+
+  test("forwards BUN_BE_BUN when the host already exported it", async () => {
+    stubHostRuntime("bun");
+    vi.stubEnv("BUN_BE_BUN", "1");
+
+    const options = await runBridgeTool();
+
+    expect(options.env).toEqual({ BUN_BE_BUN: "1" });
+  });
+
   test("keeps a plain Node host on the SDK's default child environment", async () => {
-    stubHostRuntime(false);
+    stubHostRuntime("node");
     delete process.env.ELECTRON_RUN_AS_NODE;
+    delete process.env.BUN_BE_BUN;
 
     const options = await runBridgeTool();
 

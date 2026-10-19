@@ -2,4 +2,4 @@
 "openwiki": patch
 ---
 
-fix(pi): start the MCP bridge as Node under an Electron host
+fix(pi): start the MCP bridge as Node or Bun under a compiled host
